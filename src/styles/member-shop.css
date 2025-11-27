@@ -1,0 +1,20 @@
+/* src/styles/member-shop.css */
+
+/* 商品卡片标题 */
+.product-card-title {
+  font-weight: 600;
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* 积分滑条样式 */
+.deduction-range {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+/* 成功弹窗的图标布局可以在这里加 */
+.member-shop-success-icon {
+  font-size: 3rem;
+  color: green;
+}
