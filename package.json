@@ -1,0 +1,42 @@
+{
+  "name": "oneclub-member-shop",
+  "version": "0.1.1",
+  "description": "Shared 1club member center & points market components",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "type": "module",
+
+  "files": [
+    "src"
+  ],
+
+  "scripts": {
+    "build": "echo \"no build step yet\"",
+    "test": "echo \"no tests\""
+  },
+
+  "peerDependencies": {
+    "react": ">=18.0.0 <20.0.0",
+    "react-dom": ">=18.0.0 <20.0.0"
+  },
+
+  "dependencies": {
+    "js-cookie": "^3.0.5",
+    "react-bootstrap": "^2.10.10",
+    "bootstrap": "^5.3.8"
+  },
+
+  "keywords": [
+    "1club",
+    "member",
+    "points",
+    "react",
+    "market"
+  ],
+  "author": "JeRRyChenwen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DreamOverseas/1club-member-shop.git"
+  }
+}
