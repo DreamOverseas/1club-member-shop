@@ -19,14 +19,23 @@ export function getCurrentMember() {
 }
 
 /**
+ * 覆盖当前会员信息到 Cookie
+ */
+export function setCurrentMember(member) {
+  try {
+    Cookies.set(COOKIE_KEY, JSON.stringify(member), { expires: 7 });
+  } catch (e) {
+    console.error("[useMemberAuth] Failed to set user cookie:", e);
+  }
+}
+
+/**
  * React hook：在组件里方便使用当前会员信息
  */
 export function useMemberAuth() {
   const [member, setMember] = useState(() => getCurrentMember());
 
   useEffect(() => {
-    // 简单处理：挂载时读一次 Cookie
-    // 如果你以后想做到“实时响应登录状态变化”，可以再加事件机制
     setMember(getCurrentMember());
   }, []);
 
