@@ -19,13 +19,13 @@ import { getCurrentMember, setCurrentMember } from "./hooks/useMemberAuth";
 /**
  * 积分商城主组件
  *
- * @param {object} props
- * @param {string} props.cmsEndpoint      - Strapi CMS 基础地址，例如 https://cms.xxx.com
- * @param {string} props.cmsApiKey        - Strapi API Token
- * @param {string} props.couponEndpoint   - 优惠券系统后端地址
- * @param {string} props.emailEndpoint    - 邮件服务后端地址
- * @param {function} [props.getUser]      - 可选，自定义读取当前会员信息函数，默认从 Cookie 读取
- * @param {function} [props.setUser]      - 可选，自定义写入当前会员信息函数，默认写回 Cookie
+ * props:
+ * - cmsEndpoint:    string   Strapi CMS 基础地址，例如 https://api.do360.com
+ * - cmsApiKey:      string   Strapi API Token
+ * - couponEndpoint: string   优惠券系统后端地址
+ * - emailEndpoint:  string   邮件服务后端地址
+ * - getUser?: () => member   可选，自定义读取当前会员信息函数，默认从 Cookie 读取
+ * - setUser?: (m) => void    可选，自定义写入当前会员信息函数，默认写回 Cookie
  */
 const MemberPointMarket = ({
   cmsEndpoint,
@@ -35,7 +35,7 @@ const MemberPointMarket = ({
   getUser = getCurrentMember,
   setUser = setCurrentMember,
 }) => {
-  // 当前用户（从 getUser 读取一次）
+  // 当前用户（默认从 cookie 里读）
   const currUser = getUser() || {};
 
   const [products, setProducts] = useState([]);
@@ -48,52 +48,61 @@ const MemberPointMarket = ({
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [redeemProduct, setRedeemProduct] = useState(null);
-  const maxDeduction = useMemo(() => {
-    return redeemProduct
-      ? Math.min(redeemProduct.MaxDeduction, redeemProduct.Price)
-      : 0;
-  }, [redeemProduct]);
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
-  // 拉取商品列表
+  // 最大可抵扣（受商品 MaxDeduction & 商品价格 双重限制）
+  const maxDeduction = useMemo(() => {
+    if (!redeemProduct) return 0;
+    const price = Number(redeemProduct.Price || 0);
+    const max = Number(redeemProduct.MaxDeduction || 0);
+    return Math.min(price, max);
+  }, [redeemProduct]);
+
+  // ===== 拉取商品列表 =====
   useEffect(() => {
     if (!currUser || !currUser.number) return;
+    if (!cmsEndpoint || !cmsApiKey) {
+      console.error(
+        "[MemberPointMarket] Missing cmsEndpoint or cmsApiKey, cannot load products."
+      );
+      return;
+    }
 
     const fetchProducts = async () => {
       const qs = new URLSearchParams();
       qs.append("filters[MembershipNumber][$eq]", String(currUser.number));
       qs.append("populate[AllowedProduct][populate]", "*");
 
-      const user_product_url = `${cmsEndpoint}/api/one-club-memberships?${qs.toString()}`;
-      const all_product_url = `${cmsEndpoint}/api/one-club-products?filters[ForOneClub][$eq]=True&populate=*`;
+      const userProductUrl = `${cmsEndpoint}/api/one-club-memberships?${qs.toString()}`;
+      const allProductUrl = `${cmsEndpoint}/api/one-club-products?filters[ForOneClub][$eq]=True&populate=*`;
 
       try {
         // 1) 尝试获取“当前会员专属商品”
-        const response = await fetch(user_product_url, {
+        const response = await fetch(userProductUrl, {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${cmsApiKey}`,
           },
         });
-        const user_p_data = await response.json();
+        const userData = await response.json();
 
-        let items = user_p_data?.data?.[0]?.AllowedProduct || [];
+        let items = userData?.data?.[0]?.AllowedProduct || [];
 
         // 2) 如果没有专属商品，则 fallback 到公共商品
         if (!items || items.length === 0) {
-          const all_p_response = await fetch(all_product_url, {
+          const allResponse = await fetch(allProductUrl, {
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${cmsApiKey}`,
             },
           });
-          const all_p_data = await all_p_response.json();
-          items = all_p_data.data || [];
+          const allData = await allResponse.json();
+          items = allData.data || [];
         }
 
         // 3) 按 Order 排序
-        items.sort((a, b) => a.Order - b.Order);
+        items.sort((a, b) => (a.Order || 0) - (b.Order || 0));
 
         setProducts(items);
       } catch (error) {
@@ -104,11 +113,13 @@ const MemberPointMarket = ({
     fetchProducts();
   }, [cmsApiKey, cmsEndpoint, currUser?.number]);
 
-  // 搜索过滤
-  const filteredProducts = products.filter((product) =>
-    product.Name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // ===== 搜索过滤 =====
+  const filteredProducts = products.filter((product) => {
+    const name = (product.Name || "").toLowerCase();
+    return name.includes(searchTerm.toLowerCase());
+  });
 
+  // ===== 弹窗 & 交互处理 =====
   const handleCardClick = (product) => {
     setSelectedProduct(product);
     setShowModal(true);
@@ -120,14 +131,17 @@ const MemberPointMarket = ({
   };
 
   const handleRedeemClick = (product, e) => {
-    e.stopPropagation();
+    if (e) e.stopPropagation();
     setShowModal(false);
     setRedeemProduct(product);
+    setCurrDeduction(0);
     setShowConfirmModal(true);
   };
 
   const handleDeductionChange = (value) => {
     let newValue = Number(value);
+    if (Number.isNaN(newValue)) newValue = 0;
+
     if (newValue > maxDeduction) {
       alert(`最大抵扣 ${maxDeduction}`);
       newValue = maxDeduction;
@@ -138,15 +152,23 @@ const MemberPointMarket = ({
 
   const closeSuccessModal = () => {
     setShowSuccessModal(false);
-    // 当前实现是直接刷新页面，同步积分 & 商品状态
+    // 刷新页面以同步最新积分 & 商品状态
     window.location.reload();
   };
 
-  // 更新用户积分 & 已有优惠券
+  // ===== 更新用户积分 & MyCoupon 关联 =====
   const updateUserPoint = async (cid) => {
     const latestUser = getUser() || {};
     if (!latestUser.number || !latestUser.email) {
-      console.error("Cannot update user points: missing number or email");
+      console.error(
+        "[MemberPointMarket] Cannot update user points: missing number or email."
+      );
+      return;
+    }
+    if (!cmsEndpoint || !cmsApiKey) {
+      console.error(
+        "[MemberPointMarket] Missing cmsEndpoint/cmsApiKey in updateUserPoint."
+      );
       return;
     }
 
@@ -164,16 +186,16 @@ const MemberPointMarket = ({
       if (userResponse.ok && userData.data && userData.data.length > 0) {
         const userRecord = userData.data[0];
         const documentId = userRecord.documentId;
-        const oldPoint = userRecord.Point;
-        const oldDiscountPoint = userRecord.DiscountPoint;
+        const oldPoint = Number(userRecord.Point || 0);
+        const oldDiscountPoint = Number(userRecord.DiscountPoint || 0);
 
-        const productPrice = redeemProduct.Price;
-        const usedDiscount = currDeduction;
+        const productPrice = Number(redeemProduct?.Price || 0);
+        const usedDiscount = Number(currDeduction || 0);
 
         const newPoint = oldPoint - (productPrice - usedDiscount);
         const newDiscountPoint = oldDiscountPoint - usedDiscount;
 
-        // get currently linked coupons and append new one
+        // 当前已关联的券（documentId 数组）
         const existingCoupons =
           userRecord.MyCoupon?.map((c) => c.documentId) ?? [];
         const updatedCoupons = [...new Set([...existingCoupons, cid])];
@@ -182,7 +204,7 @@ const MemberPointMarket = ({
           data: {
             Point: newPoint,
             DiscountPoint: newDiscountPoint,
-            MyCoupon: updatedCoupons,
+            MyCoupon: updatedCoupons, // 保持与原 1club-website 相同的写法
           },
         };
 
@@ -202,10 +224,10 @@ const MemberPointMarket = ({
           const updateError = await updateResponse.json();
           console.log("Error updating user info:", updateError.message);
         } else {
-          console.log("Updated successfully");
+          console.log("[MemberPointMarket] User points updated successfully.");
         }
 
-        // 更新前端的用户信息（默认写回 Cookie）
+        // 更新前端的用户信息（写回 cookie）
         const updatedUser = {
           ...latestUser,
           points: newPoint,
@@ -213,28 +235,48 @@ const MemberPointMarket = ({
         };
         setUser(updatedUser);
       } else {
-        console.error("User not found or error fetching user data");
+        console.error(
+          "[MemberPointMarket] User not found or error fetching user data."
+        );
       }
     } catch (error) {
-      console.error("Error updating user info:", error);
+      console.error("[MemberPointMarket] Error updating user info:", error);
     }
   };
 
-  // 真正“兑换”的流程
-  const comfirmRedeemNow = async () => {
+  // ===== 真正“兑换”的主流程 =====
+  const confirmRedeemNow = async () => {
+    const latestUser = getUser() || {};
+    if (!latestUser.name || !latestUser.email) {
+      alert("未找到当前登录会员信息，请重新登录后再试。");
+      return;
+    }
+    if (!couponEndpoint || !emailEndpoint) {
+      console.error(
+        "[MemberPointMarket] Missing couponEndpoint/emailEndpoint in confirmRedeemNow."
+      );
+      alert("系统配置错误，请稍后再试或联系我们。");
+      return;
+    }
+
     setLoadingRedeem(true);
 
-    const latestUser = getUser() || {};
     const expiryDate = new Date();
     expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+
+    // 安全地获取 Provider 名称：兼容多种 Strapi 结构
+    const providerName =
+      redeemProduct?.Provider?.data?.attributes?.Name ??
+      redeemProduct?.Provider?.Name ??
+      "1club";
 
     const couponPayload = {
       title: redeemProduct.Name,
       description: redeemProduct.Description,
       expiry: expiryDate.toISOString(),
-      assigned_from: redeemProduct.Provider.Name,
+      assigned_from: providerName,
       assigned_to: latestUser.name,
-      value: redeemProduct.Price - currDeduction,
+      value: Number(redeemProduct.Price || 0) - Number(currDeduction || 0),
     };
 
     try {
@@ -274,28 +316,34 @@ const MemberPointMarket = ({
         );
 
         if (emailResponse.ok) {
-          // 3) 券发出成功之后，更新积分
+          // 3) 券发出成功之后，更新积分 & 会员关联券
           await updateUserPoint(couponData.cid);
-          console.log("Redeemed.");
+          console.log("[MemberPointMarket] Redeemed successfully.");
           setLoadingRedeem(false);
           setCurrDeduction(0);
           setShowConfirmModal(false);
           setShowSuccessModal(true);
         } else {
           const emailError = await emailResponse.json();
-          console.error("Email API error:", emailError.message);
+          console.error("[MemberPointMarket] Email API error:", emailError);
           setLoadingRedeem(false);
           setCurrDeduction(0);
+          alert("兑换成功但邮件发送失败，请联系客服手动处理优惠券。");
         }
       } else {
-        console.error("Coupon system error:", couponData.message);
+        console.error(
+          "[MemberPointMarket] Coupon system error:",
+          couponData.message
+        );
         setLoadingRedeem(false);
         setCurrDeduction(0);
+        alert("兑换失败，优惠券系统出现问题，请稍后重试。");
       }
     } catch (error) {
-      console.error("Error in comfirmRedeemNow():", error);
+      console.error("[MemberPointMarket] Error in confirmRedeemNow():", error);
       setLoadingRedeem(false);
       setCurrDeduction(0);
+      alert("兑换失败，请检查网络或稍后再试。");
     }
   };
 
@@ -318,6 +366,7 @@ const MemberPointMarket = ({
         </Col>
       </Row>
 
+      {/* 商品列表 */}
       <Row>
         {filteredProducts.map((product) => {
           const { Name, Icon, Price, MaxDeduction } = product;
@@ -347,8 +396,8 @@ const MemberPointMarket = ({
                       <AlternatingText
                         text1={`${Price} 现金`}
                         text2={`360币最高抵扣${Math.min(
-                          Price,
-                          MaxDeduction
+                          Number(Price || 0),
+                          Number(MaxDeduction || 0)
                         )}！`}
                         judge={MaxDeduction}
                       />
@@ -377,7 +426,7 @@ const MemberPointMarket = ({
             <Modal.Title>{selectedProduct.Name}</Modal.Title>
           </Modal.Header>
           <Modal.Body>
-            {selectedProduct.Icon && selectedProduct.Icon.url && (
+            {selectedProduct.Icon?.url && (
               <img
                 src={`${cmsEndpoint}${selectedProduct.Icon.url}`}
                 alt={selectedProduct.Name}
@@ -420,24 +469,28 @@ const MemberPointMarket = ({
             <p>商品：{redeemProduct.Name}</p>
             {(() => {
               const userData = getUser() || {};
-              const cookiePoint = userData.points || 0;
-              const cookieDiscountPoint = userData.discount_point || 0;
+              const cookiePoint = Number(userData.points || 0);
+              const cookieDiscountPoint = Number(userData.discount_point || 0);
+
+              const finalCash =
+                Number(redeemProduct.Price || 0) - Number(currDeduction || 0);
+              const finalPoint =
+                cookiePoint - Number(redeemProduct.Price || 0) + Number(currDeduction || 0);
+              const finalDiscount = cookieDiscountPoint - Number(currDeduction || 0);
+
               return (
                 <>
                   <p>
-                    现金：
-                    {redeemProduct.Price - currDeduction} → 兑换后余额{" "}
-                    <b>
-                      {cookiePoint - redeemProduct.Price + currDeduction}
-                    </b>
+                    现金：{finalCash} → 兑换后余额{" "}
+                    <b>{finalPoint}</b>
                   </p>
                   <p>
                     360币：{currDeduction} → 兑换后余额{" "}
-                    <b>{cookieDiscountPoint - currDeduction}</b>{" "}
+                    <b>{finalDiscount}</b>{" "}
                     <b style={{ color: "SlateBlue" }}> </b>
                   </p>
                   <hr />
-                  {maxDeduction > 0 ? (
+                  {maxDeduction > 0 && (
                     <Form.Group>
                       <Row className="d-flex">
                         <Col md={7}>
@@ -459,10 +512,7 @@ const MemberPointMarket = ({
                                 variant="dark"
                                 onClick={() =>
                                   handleDeductionChange(
-                                    Math.min(
-                                      maxDeduction,
-                                      cookieDiscountPoint
-                                    )
+                                    Math.min(maxDeduction, cookieDiscountPoint)
                                   )
                                 }
                               >
@@ -477,14 +527,10 @@ const MemberPointMarket = ({
                         min="0"
                         max={maxDeduction}
                         value={currDeduction}
-                        onChange={(e) =>
-                          handleDeductionChange(e.target.value)
-                        }
+                        onChange={(e) => handleDeductionChange(e.target.value)}
                         className="deduction-range"
                       />
                     </Form.Group>
-                  ) : (
-                    <></>
                   )}
                 </>
               );
@@ -494,19 +540,23 @@ const MemberPointMarket = ({
           <Modal.Footer>
             {(() => {
               const userData = getUser() || {};
-              const cookiePoint = userData.points || 0;
-              const cookieDiscountPoint = userData.discount_point || 0;
-              const sufficientPoint =
-                cookiePoint >= redeemProduct.Price - currDeduction;
+              const cookiePoint = Number(userData.points || 0);
+              const cookieDiscountPoint = Number(userData.discount_point || 0);
+
+              const needCash =
+                Number(redeemProduct.Price || 0) - Number(currDeduction || 0);
+
+              const sufficientPoint = cookiePoint >= needCash;
               const sufficientDiscountPoint =
-                cookieDiscountPoint - currDeduction >= 0;
+                cookieDiscountPoint - Number(currDeduction || 0) >= 0;
               const canRedeem = sufficientPoint && sufficientDiscountPoint;
+
               return (
                 <Button
                   variant={canRedeem ? "dark" : "secondary"}
                   className="w-100"
-                  disabled={!canRedeem}
-                  onClick={comfirmRedeemNow}
+                  disabled={!canRedeem || loadingRedeem}
+                  onClick={confirmRedeemNow}
                 >
                   {canRedeem
                     ? loadingRedeem
