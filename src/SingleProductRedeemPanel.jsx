@@ -55,6 +55,10 @@ export default function SingleProductRedeemPanel({
   const cash = currUser?.points || 0;
   const discountPoint = currUser?.discount_point || 0;
 
+  // ✅ 新增：本次实际支付金额（和 MemberPointMarket 一致）
+  const cashToPay = price - deduction;   // 本次要付的现金
+  const pointsToUse = deduction;         // 本次要用掉的 360 币
+
   const remainingCash = cash - price + deduction;
   const remainingDiscount = discountPoint - deduction;
 
@@ -83,7 +87,8 @@ export default function SingleProductRedeemPanel({
       throw new Error("Missing membership number or email");
     }
 
-    const membershipUrl = `${cmsEndpoint}/api/one-club-memberships` +
+    const membershipUrl =
+      `${cmsEndpoint}/api/one-club-memberships` +
       `?filters[MembershipNumber][$eq]=${latestUser.number}` +
       `&filters[Email][$eq]=${latestUser.email}` +
       `&populate=MyCoupon`;
@@ -159,9 +164,7 @@ export default function SingleProductRedeemPanel({
       expiryDate.setFullYear(expiryDate.getFullYear() + 1);
 
       const providerName =
-        product.ProviderName ||
-        product.Provider?.Name ||
-        "";
+        product.ProviderName || product.Provider?.Name || "";
 
       // 1) 创建 active coupon
       const couponPayload = {
@@ -186,10 +189,7 @@ export default function SingleProductRedeemPanel({
 
       const couponData = await couponRes.json();
 
-      if (
-        !couponRes.ok ||
-        couponData.couponStatus !== "active"
-      ) {
+      if (!couponRes.ok || couponData.couponStatus !== "active") {
         console.error("Coupon system error:", couponData);
         throw new Error("Failed to create active coupon");
       }
@@ -250,12 +250,13 @@ export default function SingleProductRedeemPanel({
 
         {isLoggedIn ? (
           <>
+            {/* ✅ 改这里：左边显示本次支付金额，右边是兑换后余额 */}
             <p>
-              现金：{cash} → 兑换后余额{" "}
+              现金：{cashToPay} → 兑换后余额{" "}
               <b>{remainingCash}</b>
             </p>
             <p>
-              360币：{discountPoint} → 兑换后余额{" "}
+              360币：{pointsToUse} → 兑换后余额{" "}
               <b>{remainingDiscount}</b>
             </p>
 
