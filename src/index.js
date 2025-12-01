@@ -18,3 +18,6 @@ export { default as MemberProfileCard } from "./MemberProfileCard";
 
 // 高阶布局：登录 + 会员信息 + 商城
 export { default as MemberCenterLayout } from "./MemberCenterLayout";
+
+// ✅ 新增：单品兑换面板（给 360-react 用）
+export { default as SingleProductRedeemPanel } from "./SingleProductRedeemPanel";
