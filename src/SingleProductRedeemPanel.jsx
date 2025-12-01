@@ -1,12 +1,10 @@
 // src/SingleProductRedeemPanel.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Card,
   Button,
   Form,
   InputGroup,
-  Row,
-  Col,
   Spinner,
 } from "react-bootstrap";
 
@@ -29,7 +27,7 @@ import {
  *      Price,
  *      MaxDeduction,
  *      Description,
- *      ProviderName
+ *      ProviderName 或 Provider?.Name
  *   }
  * - onSuccess(): 可选，兑换成功后的回调
  */
@@ -70,15 +68,25 @@ export default function SingleProductRedeemPanel({
     let n = Number(value);
     if (Number.isNaN(n)) n = 0;
     if (n < 0) n = 0;
-    if (n > maxDeduction) n = maxDeduction;
+    // 同时受 MaxDeduction 和 当前 360 币余额限制
+    n = Math.min(n, maxDeduction, discountPoint);
     setDeduction(n);
   };
 
   /**
-   * 🔥 核心函数：更新 Strapi 会员积分并记录券
+   * 🔥 更新 Strapi 会员积分 & MyCoupon（和 MemberPointMarket 同逻辑）
    */
   async function updateUserPoint(couponCid) {
-    const membershipUrl = `${cmsEndpoint}/api/one-club-memberships?filters[MembershipNumber][$eq]=${currUser.number}&populate=*`;
+    const latestUser = getCurrentMember() || {};
+
+    if (!latestUser.number || !latestUser.email) {
+      throw new Error("Missing membership number or email");
+    }
+
+    const membershipUrl = `${cmsEndpoint}/api/one-club-memberships` +
+      `?filters[MembershipNumber][$eq]=${latestUser.number}` +
+      `&filters[Email][$eq]=${latestUser.email}` +
+      `&populate=MyCoupon`;
 
     const res = await fetch(membershipUrl, {
       headers: {
@@ -91,13 +99,21 @@ export default function SingleProductRedeemPanel({
     const membership = data?.data?.[0];
     if (!membership) throw new Error("Membership not found");
 
-    const id = membership.id;
+    // Strapi v5 建议使用 documentId
+    const documentId = membership.documentId;
+    const oldPoint = membership.Point || 0;
+    const oldDiscountPoint = membership.DiscountPoint || 0;
 
-    const newPoint = cash - (price - deduction);
-    const newDiscountPoint = discountPoint - deduction;
+    const newPoint = oldPoint - (price - deduction);
+    const newDiscountPoint = oldDiscountPoint - deduction;
+
+    // 已有关联券的 documentId 列表
+    const existingCoupons =
+      membership.MyCoupon?.map((c) => c.documentId) ?? [];
+    const updatedCoupons = [...new Set([...existingCoupons, couponCid])];
 
     const updateRes = await fetch(
-      `${cmsEndpoint}/api/one-club-memberships/${id}`,
+      `${cmsEndpoint}/api/one-club-memberships/${documentId}`,
       {
         method: "PUT",
         headers: {
@@ -108,40 +124,53 @@ export default function SingleProductRedeemPanel({
           data: {
             Point: newPoint,
             DiscountPoint: newDiscountPoint,
-            MyCoupon: [...(membership?.MyCoupon || []), couponCid],
+            MyCoupon: updatedCoupons,
           },
         }),
       }
     );
 
-    const updateJson = await updateRes.json();
+    if (!updateRes.ok) {
+      const errJson = await updateRes.json().catch(() => ({}));
+      console.error("Update membership error:", errJson);
+      throw new Error("Update membership failed");
+    }
 
     // 更新 cookie 中的会员信息
     const newUser = {
-      ...currUser,
+      ...latestUser,
       points: newPoint,
       discount_point: newDiscountPoint,
     };
     setCurrentMember(newUser);
-
-    return updateJson;
   }
 
   /**
-   * 🔥 核心函数：创建 coupon + 发邮件 + 更新积分
+   * 🔥 创建 coupon + 发邮件 + 更新积分
+   *   —— 对齐 1club-website / MemberPointMarket 的接口格式
    */
   async function handleRedeem() {
     if (!isLoggedIn) return;
 
     setLoading(true);
     try {
+      const latestUser = getCurrentMember() || {};
+      const expiryDate = new Date();
+      expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+
+      const providerName =
+        product.ProviderName ||
+        product.Provider?.Name ||
+        "";
+
+      // 1) 创建 active coupon
       const couponPayload = {
-        reward_name: product.Name,
-        instruction: product.Description || "",
-        validity_day: 365,
-        category: "one_club",
-        price: price - deduction,
-        provider: product.ProviderName || "",
+        title: product.Name,
+        description: product.Description || "",
+        expiry: expiryDate.toISOString(),
+        assigned_from: providerName,
+        assigned_to: latestUser.name || "",
+        value: price - deduction,
       };
 
       const couponRes = await fetch(
@@ -150,29 +179,55 @@ export default function SingleProductRedeemPanel({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(couponPayload),
+          mode: "cors",
+          credentials: "include",
         }
       );
 
       const couponData = await couponRes.json();
-      const couponCid = couponData?.cid;
 
-      if (!couponCid) throw new Error("Failed to create coupon");
+      if (
+        !couponRes.ok ||
+        couponData.couponStatus !== "active"
+      ) {
+        console.error("Coupon system error:", couponData);
+        throw new Error("Failed to create active coupon");
+      }
 
-      // 发邮件
-      await fetch(`${emailEndpoint}/1club/coupon_distribute`, {
-        method: "POST",
-        body: JSON.stringify({
-          name: currUser.name || "",
-          customer_email: currUser.email,
-          couponid: couponCid,
-          coupon_value: price - deduction,
-        }),
-      });
+      const { QRdata, cid } = couponData;
+      if (!cid) {
+        throw new Error("Coupon cid missing");
+      }
 
-      // 更新积分 + MyCoupon
-      await updateUserPoint(couponCid);
+      // 2) 邮件服务：发送券邮件
+      const emailPayload = {
+        name: latestUser.name || "",
+        email: latestUser.email,
+        data: QRdata,
+        title: product.Name,
+      };
 
-      alert("兑换成功！我们已将优惠券发送到您的邮箱。");
+      const emailRes = await fetch(
+        `${emailEndpoint}/1club/coupon_distribute`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(emailPayload),
+          mode: "cors",
+          credentials: "include",
+        }
+      );
+
+      if (!emailRes.ok) {
+        const emailErr = await emailRes.json().catch(() => ({}));
+        console.error("Email API error:", emailErr);
+        throw new Error("Send coupon email failed");
+      }
+
+      // 3) 更新 Strapi 积分 & MyCoupon
+      await updateUserPoint(cid);
+
+      alert("兑换成功，我们已将优惠券发送至您的邮箱。");
 
       if (onSuccess) onSuccess();
     } catch (e) {
@@ -196,7 +251,8 @@ export default function SingleProductRedeemPanel({
         {isLoggedIn ? (
           <>
             <p>
-              现金：{cash} → 兑换后余额 <b>{remainingCash}</b>
+              现金：{cash} → 兑换后余额{" "}
+              <b>{remainingCash}</b>
             </p>
             <p>
               360币：{discountPoint} → 兑换后余额{" "}
@@ -239,7 +295,9 @@ export default function SingleProductRedeemPanel({
                   <Button
                     variant="outline-secondary"
                     onClick={() =>
-                      handleDeductionInput(maxDeduction)
+                      handleDeductionInput(
+                        Math.min(maxDeduction, discountPoint)
+                      )
                     }
                   >
                     Max
