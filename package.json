@@ -1,6 +1,6 @@
 {
   "name": "oneclub-member-shop",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Shared 1club member center & points market components",
   "main": "src/index.js",
   "module": "src/index.js",
