@@ -1,11 +1,6 @@
 // src/SingleProductRedeemPanel.jsx
 import React, { useMemo, useState } from "react";
-import {
-  Card,
-  Button,
-  Form,
-  InputGroup,
-} from "react-bootstrap";
+import { Card, Button, Form, InputGroup } from "react-bootstrap";
 
 import {
   getCurrentMember,
@@ -25,7 +20,7 @@ import {
  *      Price,          // 价格（现金点）
  *      MaxDeduction,   // 最大可抵扣点数
  *      Description,    // 商品描述
- *      ProviderName,   // 发券方（商家名称，可选）
+ *      ProviderName,   // ★ 必填：发券方（必须和 CouponSysAccount.Name 完全一致）
  *   }
  * - onSuccess()    : 兑换成功后的回调（可选）
  */
@@ -161,7 +156,6 @@ export default function SingleProductRedeemPanel({
 
   /**
    * 核心：创建 active coupon + 发送邮件 + 更新积分
-   * 这里完全照抄 MemberPointMarket.jsx 的结构
    */
   async function handleRedeem() {
     if (!isLoggedIn) return;
@@ -173,38 +167,27 @@ export default function SingleProductRedeemPanel({
       const expiryDate = new Date();
       expiryDate.setFullYear(expiryDate.getFullYear() + 1);
 
-      // 🚩 动态决定 assigned_from
-      let assignedFrom = product.ProviderName || "";
-
-      if (!assignedFrom && typeof window !== "undefined") {
-        const host = window.location.hostname || "";
-        if (host.includes("1club")) {
-          assignedFrom = "1club";
-        } else if (host.includes("360")) {
-          assignedFrom = "360media";
-        }
-      }
+      // ★ 从 product.ProviderName 读取提供者名称
+      let assignedFrom = (product?.ProviderName || "").trim();
 
       if (!assignedFrom) {
-        assignedFrom = "1club"; // 最终兜底
+        // 强烈建议业务方总是传 ProviderName；没传就兜底防炸
+        console.warn(
+          "[SingleProductRedeemPanel] product.ProviderName 为空，使用兜底提供者 '1Club'"
+        );
+        assignedFrom = "1Club";
       }
 
-      // 🚩 兜底 assigned_to
-      const assignedTo =
-        latestUser.name ||
-        latestUser.username ||
-        latestUser.displayName ||
-        "会员";
-
-      // 🚀 最终 payload
       const couponPayload = {
         title: product.Name,
         description: product.Description || "",
         expiry: expiryDate.toISOString(),
-        assigned_from: assignedFrom,
-        assigned_to: assignedTo,
-        value: Number(price - deduction),
+        assigned_from: assignedFrom,       // 必须和 CouponSysAccount.Name 一致
+        assigned_to: latestUser.name,
+        value: price - deduction,
       };
+
+      console.log("couponPayload sending:", couponPayload);
 
       // 1) 在优惠券系统创建 active 券
       const couponResponse = await fetch(
