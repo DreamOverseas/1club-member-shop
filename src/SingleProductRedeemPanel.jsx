@@ -173,14 +173,37 @@ export default function SingleProductRedeemPanel({
       const expiryDate = new Date();
       expiryDate.setFullYear(expiryDate.getFullYear() + 1);
 
-      // 🚩 关键：用和 MemberPointMarket 一模一样的字段
+      // 🚩 动态决定 assigned_from
+      let assignedFrom = product.ProviderName || "";
+
+      if (!assignedFrom && typeof window !== "undefined") {
+        const host = window.location.hostname || "";
+        if (host.includes("1club")) {
+          assignedFrom = "1club";
+        } else if (host.includes("360")) {
+          assignedFrom = "360media";
+        }
+      }
+
+      if (!assignedFrom) {
+        assignedFrom = "1club"; // 最终兜底
+      }
+
+      // 🚩 兜底 assigned_to
+      const assignedTo =
+        latestUser.name ||
+        latestUser.username ||
+        latestUser.displayName ||
+        "会员";
+
+      // 🚀 最终 payload
       const couponPayload = {
         title: product.Name,
         description: product.Description || "",
         expiry: expiryDate.toISOString(),
-        assigned_from: product.ProviderName || "",
-        assigned_to: latestUser.name,
-        value: price - deduction,
+        assigned_from: assignedFrom,
+        assigned_to: assignedTo,
+        value: Number(price - deduction),
       };
 
       // 1) 在优惠券系统创建 active 券
@@ -334,7 +357,9 @@ export default function SingleProductRedeemPanel({
           disabled={!canRedeem}
           onClick={handleRedeem}
         >
-          {loading ? "处理中..." : !isLoggedIn
+          {loading
+            ? "处理中..."
+            : !isLoggedIn
             ? "请先登录"
             : sufficientCash && sufficientDiscount
             ? "确认兑换"
