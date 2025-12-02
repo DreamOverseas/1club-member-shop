@@ -1,11 +1,12 @@
 // src/SingleProductRedeemPanel.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, Button, Form, InputGroup } from "react-bootstrap";
 
 import {
   getCurrentMember,
   setCurrentMember,
 } from "./hooks/useMemberAuth";
+import SuccessModal from "./components/SuccessModal"; // ★ 新增：成功弹窗
 
 /**
  * 单品兑换面板：给 Media360 用的“现金或360币支付”
@@ -38,6 +39,57 @@ export default function SingleProductRedeemPanel({
 
   const [deduction, setDeduction] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false); // ★ 新增：控制成功弹窗
+
+  // ★★★ 新增：组件加载时自动从 Strapi 刷新一次积分 & 写 cookie
+  useEffect(() => {
+    async function refreshMemberBalance() {
+      const user = getCurrentMember() || {};
+      if (!cmsEndpoint || !cmsApiKey) return;
+      if (!user.number) return; // 未登录就不查
+
+      try {
+        const qs = new URLSearchParams();
+        qs.append("filters[MembershipNumber][$eq]", String(user.number));
+
+        const url = `${cmsEndpoint}/api/one-club-memberships?${qs.toString()}`;
+        const res = await fetch(url, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${cmsApiKey}`,
+          },
+        });
+
+        if (!res.ok) return;
+        const json = await res.json();
+        const record = json?.data?.[0];
+        if (!record) return;
+
+        const refreshed = {
+          ...user,
+          points: Number(record.Point ?? user.points ?? 0),
+          discount_point: Number(
+            record.DiscountPoint ?? user.discount_point ?? 0
+          ),
+          loyalty_point: Number(
+            record.LoyaltyPoint ?? user.loyalty_point ?? 0
+          ),
+        };
+
+        setCurrentMember(refreshed);
+        console.log(
+          "[SingleProductRedeemPanel] refreshed member balance from server"
+        );
+      } catch (err) {
+        console.error(
+          "[SingleProductRedeemPanel] refreshMemberBalance error:",
+          err
+        );
+      }
+    }
+
+    refreshMemberBalance();
+  }, [cmsEndpoint, cmsApiKey]);
 
   const price = Number(product?.Price || 0);
   const maxDeduction = useMemo(
@@ -49,8 +101,8 @@ export default function SingleProductRedeemPanel({
   const discountPoint = currUser?.discount_point || 0;
 
   // ✅ 本次实际支付金额（和 MemberPointMarket 保持一致的展示逻辑）
-  const cashToPay = price - deduction;   // 现金：价格 - 抵扣
-  const pointsToUse = deduction;         // 360币：抵扣多少就是用多少
+  const cashToPay = price - deduction; // 现金：价格 - 抵扣
+  const pointsToUse = deduction; // 360币：抵扣多少就是用多少
 
   // ✅ 兑换后的余额
   const remainingCash = cash - cashToPay;
@@ -187,9 +239,9 @@ export default function SingleProductRedeemPanel({
         title: product.Name,
         description: product.Description || "",
         expiry: expiryDate.toISOString(),
-        assigned_from: assignedFrom,       // 必须和 CouponSysAccount.Name 一致
+        assigned_from: assignedFrom, // 必须和 CouponSysAccount.Name 一致
         assigned_to: latestUser.name,
-        value: cashToPay,                  // ✅ 只付“现金部分”
+        value: cashToPay, // ✅ 只付“现金部分”
       };
 
       console.log("couponPayload sending:", couponPayload);
@@ -238,9 +290,8 @@ export default function SingleProductRedeemPanel({
           setLoading(false);
           setDeduction(0);
 
-          alert("兑换成功！我们已将优惠券发送到您的邮箱。");
-
-          if (onSuccess) onSuccess();
+          // ★ 改成弹窗，不再使用 alert
+          setShowSuccessModal(true);
         } else {
           const emailError = await emailResponse.json().catch(() => ({}));
           console.error("Email API error:", emailError.message);
@@ -263,100 +314,114 @@ export default function SingleProductRedeemPanel({
   }
 
   return (
-    <Card>
-      <Card.Body>
-        <h5 className="mb-3">确认兑换</h5>
+    <>
+      <Card>
+        <Card.Body>
+          <h5 className="mb-3">确认兑换</h5>
 
-        <p>
-          商品：<b>{product?.Name}</b>
-        </p>
-        <p>价格：{price} 现金</p>
+          <p>
+            商品：<b>{product?.Name}</b>
+          </p>
+          <p>价格：{price} 现金</p>
 
-        {isLoggedIn ? (
-          <>
-            {/* ✅ 左边显示本次支付金额，右边显示兑换后余额 */}
-            <p>
-              现金：{cashToPay} → 兑换后余额 <b>{remainingCash}</b>
-            </p>
-            <p>
-              360币：{pointsToUse} → 兑换后余额{" "}
-              <b>{remainingDiscount}</b>
-            </p>
+          {isLoggedIn ? (
+            <>
+              {/* ✅ 左边显示本次支付金额，右边显示兑换后余额 */}
+              <p>
+                现金：{cashToPay} → 兑换后余额 <b>{remainingCash}</b>
+              </p>
+              <p>
+                360币：{pointsToUse} → 兑换后余额{" "}
+                <b>{remainingDiscount}</b>
+              </p>
 
-            {!sufficientCash && (
-              <p style={{ color: "red" }}>现金不足</p>
-            )}
-            {!sufficientDiscount && (
-              <p style={{ color: "red" }}>360币不足</p>
-            )}
+              {!sufficientCash && (
+                <p style={{ color: "red" }}>现金不足</p>
+              )}
+              {!sufficientDiscount && (
+                <p style={{ color: "red" }}>360币不足</p>
+              )}
 
-            {maxDeduction > 0 && (
-              <Form.Group className="mt-3">
-                <Form.Label>
-                  点数抵扣 ({deduction}/{maxDeduction})
-                </Form.Label>
+              {maxDeduction > 0 && (
+                <Form.Group className="mt-3">
+                  <Form.Label>
+                    点数抵扣 ({deduction}/{maxDeduction})
+                  </Form.Label>
 
-                <Form.Range
-                  min={0}
-                  max={maxDeduction}
-                  step={1}
-                  value={deduction}
-                  onChange={(e) =>
-                    handleDeductionInput(e.target.value)
-                  }
-                />
-
-                <InputGroup className="mt-2">
-                  <Form.Control
-                    type="number"
+                  <Form.Range
                     min={0}
                     max={maxDeduction}
+                    step={1}
                     value={deduction}
                     onChange={(e) =>
                       handleDeductionInput(e.target.value)
                     }
                   />
-                  <Button
-                    variant="outline-secondary"
-                    onClick={() =>
-                      handleDeductionInput(maxDeduction)
-                    }
-                  >
-                    Max
-                  </Button>
-                </InputGroup>
-              </Form.Group>
-            )}
 
-            <p className="mt-3">
-              注：兑换成功后的核销券有效期为一年，请注意哦！
+                  <InputGroup className="mt-2">
+                    <Form.Control
+                      type="number"
+                      min={0}
+                      max={maxDeduction}
+                      value={deduction}
+                      onChange={(e) =>
+                        handleDeductionInput(e.target.value)
+                      }
+                    />
+                    <Button
+                      variant="outline-secondary"
+                      onClick={() =>
+                        handleDeductionInput(maxDeduction)
+                      }
+                    >
+                      Max
+                    </Button>
+                  </InputGroup>
+                </Form.Group>
+              )}
+
+              <p className="mt-3">
+                注：兑换成功后的核销券有效期为一年，请注意哦！
+              </p>
+            </>
+          ) : (
+            <p style={{ color: "red" }}>
+              请先登录会员中心再使用现金或 360 币支付。
             </p>
-          </>
-        ) : (
-          <p style={{ color: "red" }}>
-            请先登录会员中心再使用现金或 360 币支付。
-          </p>
-        )}
-      </Card.Body>
+          )}
+        </Card.Body>
 
-      <Card.Footer>
-        <Button
-          variant={canRedeem ? "dark" : "secondary"}
-          className="w-100"
-          disabled={!canRedeem}
-          onClick={handleRedeem}
-        >
-          {loading
-            ? "处理中..."
-            : !isLoggedIn
-            ? "请先登录"
-            : sufficientCash && sufficientDiscount
-            ? "确认兑换"
-            : !sufficientCash
-            ? "现金不足"
-            : "360币不足"}
-        </Button>
-      </Card.Footer>
-    </Card>
+        <Card.Footer>
+          <Button
+            variant={canRedeem ? "dark" : "secondary"}
+            className="w-100"
+            disabled={!canRedeem}
+            onClick={handleRedeem}
+          >
+            {loading
+              ? "处理中..."
+              : !isLoggedIn
+              ? "请先登录"
+              : sufficientCash && sufficientDiscount
+              ? "确认兑换"
+              : !sufficientCash
+              ? "现金不足"
+              : "360币不足"}
+          </Button>
+        </Card.Footer>
+      </Card>
+
+      {/* ✅ 兑换成功弹窗：标题 = 商品名，正文 = “兑换成功” */}
+      <SuccessModal
+        show={showSuccessModal}
+        title={product?.Name || "兑换成功"}
+        onHide={() => {
+          setShowSuccessModal(false);
+          if (onSuccess) onSuccess(); // 关闭弹窗后再执行回调（例如 navigate(-1)）
+        }}
+      >
+        兑换成功
+      </SuccessModal>
+    </>
   );
 }

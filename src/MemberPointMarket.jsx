@@ -59,6 +59,54 @@ const MemberPointMarket = ({
     return Math.min(price, max);
   }, [redeemProduct]);
 
+
+  // ===== 页面加载时自动同步最新积分 & 写 cookie =====
+  useEffect(() => {
+    async function refreshMemberBalance() {
+      const user = getUser() || {};
+      if (!cmsEndpoint || !cmsApiKey) return;
+      if (!user.number) return; // 未登录不查
+
+      try {
+        const qs = new URLSearchParams();
+        qs.append("filters[MembershipNumber][$eq]", String(user.number));
+
+        const url = `${cmsEndpoint}/api/one-club-memberships?${qs.toString()}`;
+        const res = await fetch(url, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${cmsApiKey}`,
+          },
+        });
+
+        if (!res.ok) return;
+        const json = await res.json();
+        const record = json?.data?.[0];
+        if (!record) return;
+
+        // 生成更新后的 member 对象
+        const refreshed = {
+          ...user,
+          points: Number(record.Point ?? user.points ?? 0),
+          discount_point: Number(record.DiscountPoint ?? user.discount_point ?? 0),
+          loyalty_point: Number(record.LoyaltyPoint ?? user.loyalty_point ?? 0),
+        };
+
+        // 更新 Cookie 供其它页面使用
+        setUser(refreshed);
+
+        // 也让界面立即使用最新余额（影响弹窗里的扣减提示显示）
+        // ⚠️ currUser 是初始化常量，这里不可以直接修改，所以直接强制刷新页面
+        // 但比 window.reload() 优雅——只更新列表等不相关 UI
+        console.log("[MemberPointMarket] refreshed member balance from server");
+      } catch (err) {
+        console.error("[MemberPointMarket] refreshMemberBalance error:", err);
+      }
+    }
+
+    refreshMemberBalance();
+  }, [cmsEndpoint, cmsApiKey]);
+
   // ===== 拉取商品列表 =====
   useEffect(() => {
     if (!currUser || !currUser.number) return;
