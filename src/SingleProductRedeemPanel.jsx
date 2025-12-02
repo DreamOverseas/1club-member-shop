@@ -41,7 +41,7 @@ export default function SingleProductRedeemPanel({
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false); // ★ 新增：控制成功弹窗
 
-  // ★★★ 新增：组件加载时自动从 Strapi 刷新一次积分 & 写 cookie
+  // ★★★ 组件加载时自动从 Strapi 刷新一次积分 & 写 cookie
   useEffect(() => {
     async function refreshMemberBalance() {
       const user = getCurrentMember() || {};
@@ -124,7 +124,7 @@ export default function SingleProductRedeemPanel({
 
   /**
    * 更新 Strapi 里的积分 + MyCoupon，并同步 cookie
-   * （结构和 MemberPointMarket.jsx 保持一致）
+   * （结构和 MemberPointMarket.jsx 保持一致，改用 documentId）
    */
   async function updateUserPoint(couponCid) {
     const latestUser = getCurrentMember() || {};
@@ -163,7 +163,15 @@ export default function SingleProductRedeemPanel({
       return;
     }
 
-    const memberId = userRecord.id;
+    // ★ 关键：使用 documentId，而不是 id
+    const documentId = userRecord.documentId;
+    if (!documentId) {
+      console.error(
+        "[SingleProductRedeemPanel] membership record missing documentId"
+      );
+      return;
+    }
+
     const currentPoint = Number(userRecord.Point || 0);
     const currentDiscountPoint = Number(userRecord.DiscountPoint || 0);
 
@@ -184,7 +192,7 @@ export default function SingleProductRedeemPanel({
     };
 
     const updateResponse = await fetch(
-      `${cmsEndpoint}/api/one-club-memberships/${memberId}`,
+      `${cmsEndpoint}/api/one-club-memberships/${documentId}`,
       {
         method: "PUT",
         headers: {
@@ -197,7 +205,10 @@ export default function SingleProductRedeemPanel({
 
     if (!updateResponse.ok) {
       const updateError = await updateResponse.json().catch(() => ({}));
-      console.error("Error updating user info:", updateError.message);
+      console.error(
+        "Error updating user info:",
+        updateError?.error || updateError
+      );
     } else {
       console.log("Membership updated successfully");
     }
