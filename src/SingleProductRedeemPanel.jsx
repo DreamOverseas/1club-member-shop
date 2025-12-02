@@ -48,11 +48,16 @@ export default function SingleProductRedeemPanel({
   const cash = currUser?.points || 0;
   const discountPoint = currUser?.discount_point || 0;
 
-  const remainingCash = cash - price + deduction;
-  const remainingDiscount = discountPoint - deduction;
+  // ✅ 本次实际支付金额（和 MemberPointMarket 保持一致的展示逻辑）
+  const cashToPay = price - deduction;   // 现金：价格 - 抵扣
+  const pointsToUse = deduction;         // 360币：抵扣多少就是用多少
 
-  const sufficientCash = cash >= price - deduction;
-  const sufficientDiscount = discountPoint - deduction >= 0;
+  // ✅ 兑换后的余额
+  const remainingCash = cash - cashToPay;
+  const remainingDiscount = discountPoint - pointsToUse;
+
+  const sufficientCash = cash >= cashToPay;
+  const sufficientDiscount = remainingDiscount >= 0;
 
   const canRedeem =
     isLoggedIn && sufficientCash && sufficientDiscount && !loading;
@@ -110,9 +115,9 @@ export default function SingleProductRedeemPanel({
     const currentPoint = Number(userRecord.Point || 0);
     const currentDiscountPoint = Number(userRecord.DiscountPoint || 0);
 
-    // 按照商城同样的规则扣减
-    const newPoint = currentPoint - (price - deduction);
-    const newDiscountPoint = currentDiscountPoint - deduction;
+    // ✅ 按照“本次支付金额”扣减（和上面的 cashToPay / pointsToUse 一致）
+    const newPoint = currentPoint - cashToPay;
+    const newDiscountPoint = currentDiscountPoint - pointsToUse;
 
     const existingCoupons =
       userRecord.MyCoupon?.map((c) => c.documentId) ?? [];
@@ -184,7 +189,7 @@ export default function SingleProductRedeemPanel({
         expiry: expiryDate.toISOString(),
         assigned_from: assignedFrom,       // 必须和 CouponSysAccount.Name 一致
         assigned_to: latestUser.name,
-        value: price - deduction,
+        value: cashToPay,                  // ✅ 只付“现金部分”
       };
 
       console.log("couponPayload sending:", couponPayload);
@@ -269,11 +274,12 @@ export default function SingleProductRedeemPanel({
 
         {isLoggedIn ? (
           <>
+            {/* ✅ 左边显示本次支付金额，右边显示兑换后余额 */}
             <p>
-              现金：{cash} → 兑换后余额 <b>{remainingCash}</b>
+              现金：{cashToPay} → 兑换后余额 <b>{remainingCash}</b>
             </p>
             <p>
-              360币：{discountPoint} → 兑换后余额{" "}
+              360币：{pointsToUse} → 兑换后余额{" "}
               <b>{remainingDiscount}</b>
             </p>
 
