@@ -9,6 +9,8 @@ import {
   Modal,
   Form,
   InputGroup,
+  ListGroup,
+  Image,
 } from "react-bootstrap";
 
 // 样式 & 小组件 & hooks
@@ -20,12 +22,12 @@ import { getCurrentMember, setCurrentMember } from "./hooks/useMemberAuth";
  * 积分商城主组件
  *
  * props:
- * - cmsEndpoint:    string   Strapi CMS 基础地址，例如 https://api.do360.com
+ * - cmsEndpoint:    string   Strapi CMS 基础地址
  * - cmsApiKey:      string   Strapi API Token
  * - couponEndpoint: string   优惠券系统后端地址
  * - emailEndpoint:  string   邮件服务后端地址
- * - getUser?: () => member   可选，自定义读取当前会员信息函数，默认从 Cookie 读取
- * - setUser?: (m) => void    可选，自定义写入当前会员信息函数，默认写回 Cookie
+ * - getUser?: () => member   可选，自定义读取当前会员信息函数
+ * - setUser?: (m) => void    可选，自定义写入当前会员信息函数
  */
 const MemberPointMarket = ({
   cmsEndpoint,
@@ -43,29 +45,39 @@ const MemberPointMarket = ({
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
-  const [currDeduction, setCurrDeduction] = useState(0);
-  const [loadingRedeem, setLoadingRedeem] = useState(false);
-
+  // 兑换相关 State
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [redeemProduct, setRedeemProduct] = useState(null);
+  const [currDeduction, setCurrDeduction] = useState(0);
+  const [customPrice, setCustomPrice] = useState("");
+  const [loadingRedeem, setLoadingRedeem] = useState(false);
 
+  // 兑换结果 State (用于 Success Modal 展示)
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [redeemResult, setRedeemResult] = useState(null);
 
-  // 最大可抵扣（受商品 MaxDeduction & 商品价格 双重限制）
+  // 计算当前生效的基础价格（固定价格 或 用户输入价格）
+  const currentBasePrice = useMemo(() => {
+    if (!redeemProduct) return 0;
+    if (redeemProduct.Fixed) {
+      return Number(customPrice) || 0;
+    }
+    return Number(redeemProduct.Price || 0);
+  }, [redeemProduct, customPrice]);
+
+  // 最大可抵扣（受商品 MaxDeduction & 当前基础价格 双重限制）
   const maxDeduction = useMemo(() => {
     if (!redeemProduct) return 0;
-    const price = Number(redeemProduct.Price || 0);
     const max = Number(redeemProduct.MaxDeduction || 0);
-    return Math.min(price, max);
-  }, [redeemProduct]);
-
+    return Math.min(currentBasePrice, max);
+  }, [redeemProduct, currentBasePrice]);
 
   // ===== 页面加载时自动同步最新积分 & 写 cookie =====
   useEffect(() => {
     async function refreshMemberBalance() {
       const user = getUser() || {};
       if (!cmsEndpoint || !cmsApiKey) return;
-      if (!user.number) return; // 未登录不查
+      if (!user.number) return;
 
       try {
         const qs = new URLSearchParams();
@@ -84,20 +96,16 @@ const MemberPointMarket = ({
         const record = json?.data?.[0];
         if (!record) return;
 
-        // 生成更新后的 member 对象
         const refreshed = {
           ...user,
           points: Number(record.Point ?? user.points ?? 0),
-          discount_point: Number(record.DiscountPoint ?? user.discount_point ?? 0),
+          discount_point: Number(
+            record.DiscountPoint ?? user.discount_point ?? 0
+          ),
           loyalty_point: Number(record.LoyaltyPoint ?? user.loyalty_point ?? 0),
         };
 
-        // 更新 Cookie 供其它页面使用
         setUser(refreshed);
-
-        // 也让界面立即使用最新余额（影响弹窗里的扣减提示显示）
-        // ⚠️ currUser 是初始化常量，这里不可以直接修改，所以直接强制刷新页面
-        // 但比 window.reload() 优雅——只更新列表等不相关 UI
         console.log("[MemberPointMarket] refreshed member balance from server");
       } catch (err) {
         console.error("[MemberPointMarket] refreshMemberBalance error:", err);
@@ -105,7 +113,7 @@ const MemberPointMarket = ({
     }
 
     refreshMemberBalance();
-  }, [cmsEndpoint, cmsApiKey]);
+  }, [cmsEndpoint, cmsApiKey, getUser, setUser]);
 
   // ===== 拉取商品列表 =====
   useEffect(() => {
@@ -126,7 +134,6 @@ const MemberPointMarket = ({
       const allProductUrl = `${cmsEndpoint}/api/one-club-products?filters[ForOneClub][$eq]=True&populate=*`;
 
       try {
-        // 1) 尝试获取“当前会员专属商品”
         const response = await fetch(userProductUrl, {
           headers: {
             "Content-Type": "application/json",
@@ -134,10 +141,8 @@ const MemberPointMarket = ({
           },
         });
         const userData = await response.json();
-
         let items = userData?.data?.[0]?.AllowedProduct || [];
 
-        // 2) 如果没有专属商品，则 fallback 到公共商品
         if (!items || items.length === 0) {
           const allResponse = await fetch(allProductUrl, {
             headers: {
@@ -149,9 +154,7 @@ const MemberPointMarket = ({
           items = allData.data || [];
         }
 
-        // 3) 按 Order 排序
         items.sort((a, b) => (a.Order || 0) - (b.Order || 0));
-
         setProducts(items);
       } catch (error) {
         console.error("Error fetching products:", error);
@@ -182,6 +185,13 @@ const MemberPointMarket = ({
     if (e) e.stopPropagation();
     setShowModal(false);
     setRedeemProduct(product);
+
+    if (product.Fixed) {
+      setCustomPrice("");
+    } else {
+      setCustomPrice(product.Price);
+    }
+
     setCurrDeduction(0);
     setShowConfirmModal(true);
   };
@@ -191,34 +201,38 @@ const MemberPointMarket = ({
     if (Number.isNaN(newValue)) newValue = 0;
 
     if (newValue > maxDeduction) {
-      alert(`最大抵扣 ${maxDeduction}`);
       newValue = maxDeduction;
     }
     if (newValue < 0) newValue = 0;
     setCurrDeduction(newValue);
   };
 
+  const handleCustomPriceChange = (val) => {
+    if (val === "") {
+      setCustomPrice("");
+      setCurrDeduction(0);
+      return;
+    }
+    const num = parseFloat(val);
+    if (!isNaN(num) && num >= 0) {
+      setCustomPrice(num);
+      if (currDeduction > num) {
+        setCurrDeduction(0);
+      }
+    }
+  };
+
   const closeSuccessModal = () => {
     setShowSuccessModal(false);
-    // 刷新页面以同步最新积分 & 商品状态
+    setRedeemResult(null);
+    // 刷新页面以同步最新积分
     window.location.reload();
   };
 
-  // ===== 更新用户积分 & MyCoupon 关联 =====
+  // ===== 更新用户积分 =====
   const updateUserPoint = async (cid) => {
     const latestUser = getUser() || {};
-    if (!latestUser.number || !latestUser.email) {
-      console.error(
-        "[MemberPointMarket] Cannot update user points: missing number or email."
-      );
-      return;
-    }
-    if (!cmsEndpoint || !cmsApiKey) {
-      console.error(
-        "[MemberPointMarket] Missing cmsEndpoint/cmsApiKey in updateUserPoint."
-      );
-      return;
-    }
+    if (!latestUser.number || !latestUser.email) return;
 
     const userQueryUrl = `${cmsEndpoint}/api/one-club-memberships?filters[MembershipNumber][$eq]=${latestUser.number}&filters[Email][$eq]=${latestUser.email}&populate=MyCoupon`;
 
@@ -237,13 +251,12 @@ const MemberPointMarket = ({
         const oldPoint = Number(userRecord.Point || 0);
         const oldDiscountPoint = Number(userRecord.DiscountPoint || 0);
 
-        const productPrice = Number(redeemProduct?.Price || 0);
+        const productPrice = currentBasePrice;
         const usedDiscount = Number(currDeduction || 0);
 
         const newPoint = oldPoint - (productPrice - usedDiscount);
         const newDiscountPoint = oldDiscountPoint - usedDiscount;
 
-        // 当前已关联的券（documentId 数组）
         const existingCoupons =
           userRecord.MyCoupon?.map((c) => c.documentId) ?? [];
         const updatedCoupons = [...new Set([...existingCoupons, cid])];
@@ -252,40 +265,25 @@ const MemberPointMarket = ({
           data: {
             Point: newPoint,
             DiscountPoint: newDiscountPoint,
-            MyCoupon: updatedCoupons, // 保持与原 1club-website 相同的写法
+            MyCoupon: updatedCoupons,
           },
         };
 
-        const updateResponse = await fetch(
-          `${cmsEndpoint}/api/one-club-memberships/${documentId}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${cmsApiKey}`,
-            },
-            body: JSON.stringify(updatePayload),
-          }
-        );
+        await fetch(`${cmsEndpoint}/api/one-club-memberships/${documentId}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${cmsApiKey}`,
+          },
+          body: JSON.stringify(updatePayload),
+        });
 
-        if (!updateResponse.ok) {
-          const updateError = await updateResponse.json();
-          console.log("Error updating user info:", updateError.message);
-        } else {
-          console.log("[MemberPointMarket] User points updated successfully.");
-        }
-
-        // 更新前端的用户信息（写回 cookie）
         const updatedUser = {
           ...latestUser,
           points: newPoint,
           discount_point: newDiscountPoint,
         };
         setUser(updatedUser);
-      } else {
-        console.error(
-          "[MemberPointMarket] User not found or error fetching user data."
-        );
       }
     } catch (error) {
       console.error("[MemberPointMarket] Error updating user info:", error);
@@ -299,11 +297,9 @@ const MemberPointMarket = ({
       alert("未找到当前登录会员信息，请重新登录后再试。");
       return;
     }
-    if (!couponEndpoint || !emailEndpoint) {
-      console.error(
-        "[MemberPointMarket] Missing couponEndpoint/emailEndpoint in confirmRedeemNow."
-      );
-      alert("系统配置错误，请稍后再试或联系我们。");
+
+    if (redeemProduct.Fixed && (!currentBasePrice || currentBasePrice <= 0)) {
+      alert("请输入有效的金额");
       return;
     }
 
@@ -312,11 +308,12 @@ const MemberPointMarket = ({
     const expiryDate = new Date();
     expiryDate.setFullYear(expiryDate.getFullYear() + 1);
 
-    // 安全地获取 Provider 名称：兼容多种 Strapi 结构
     const providerName =
       redeemProduct?.Provider?.data?.attributes?.Name ??
       redeemProduct?.Provider?.Name ??
       "1club";
+
+    const finalValue = currentBasePrice - Number(currDeduction || 0);
 
     const couponPayload = {
       title: redeemProduct.Name,
@@ -324,11 +321,11 @@ const MemberPointMarket = ({
       expiry: expiryDate.toISOString(),
       assigned_from: providerName,
       assigned_to: latestUser.name,
-      value: Number(redeemProduct.Price || 0) - Number(currDeduction || 0),
+      value: finalValue,
     };
 
     try {
-      // 1) 向优惠券系统创建 active 券
+      // 1. 创建 Coupon
       const couponResponse = await fetch(
         `${couponEndpoint}/create-active-coupon`,
         {
@@ -344,54 +341,65 @@ const MemberPointMarket = ({
       if (couponResponse.ok && couponData.couponStatus === "active") {
         const QRdata = couponData.QRdata;
 
-        // 2) 向邮件服务发送券邮件
-        const emailPayload = {
-          name: latestUser.name,
-          email: latestUser.email,
-          data: QRdata,
-          title: redeemProduct.Name,
-        };
-
-        const emailResponse = await fetch(
-          `${emailEndpoint}/1club/coupon_distribute`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(emailPayload),
-            mode: "cors",
-            credentials: "include",
-          }
-        );
-
-        if (emailResponse.ok) {
-          // 3) 券发出成功之后，更新积分 & 会员关联券
+        // 2. 根据类型处理：Fixed(现场支付) vs 普通(邮件发送)
+        if (redeemProduct.Fixed) {
+          // Fixed 模式：跳过邮件，直接显示结果
           await updateUserPoint(couponData.cid);
-          console.log("[MemberPointMarket] Redeemed successfully.");
+          
+          setRedeemResult({
+            qrData: QRdata,
+            amount: currentBasePrice,
+            deduction: currDeduction,
+            paid: finalValue,
+            timestamp: new Date().toLocaleString(),
+          });
+
           setLoadingRedeem(false);
           setCurrDeduction(0);
+          setCustomPrice("");
           setShowConfirmModal(false);
           setShowSuccessModal(true);
+
         } else {
-          const emailError = await emailResponse.json();
-          console.error("[MemberPointMarket] Email API error:", emailError);
-          setLoadingRedeem(false);
-          setCurrDeduction(0);
-          alert("兑换成功但邮件发送失败，请联系客服手动处理优惠券。");
+          // 普通模式：发送邮件
+          const emailPayload = {
+            name: latestUser.name,
+            email: latestUser.email,
+            data: QRdata,
+            title: redeemProduct.Name,
+          };
+
+          const emailResponse = await fetch(
+            `${emailEndpoint}/1club/coupon_distribute`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(emailPayload),
+              mode: "cors",
+              credentials: "include",
+            }
+          );
+
+          if (emailResponse.ok) {
+            await updateUserPoint(couponData.cid);
+            setLoadingRedeem(false);
+            setCurrDeduction(0);
+            setCustomPrice("");
+            setShowConfirmModal(false);
+            setShowSuccessModal(true);
+          } else {
+            setLoadingRedeem(false);
+            alert("兑换成功但邮件发送失败，请联系客服。");
+          }
         }
       } else {
-        console.error(
-          "[MemberPointMarket] Coupon system error:",
-          couponData.message
-        );
         setLoadingRedeem(false);
-        setCurrDeduction(0);
-        alert("兑换失败，优惠券系统出现问题，请稍后重试。");
+        alert("兑换失败，系统繁忙，请稍后重试。");
       }
     } catch (error) {
-      console.error("[MemberPointMarket] Error in confirmRedeemNow():", error);
+      console.error("[MemberPointMarket] Error:", error);
       setLoadingRedeem(false);
-      setCurrDeduction(0);
-      alert("兑换失败，请检查网络或稍后再试。");
+      alert("网络错误，请稍后再试。");
     }
   };
 
@@ -417,8 +425,9 @@ const MemberPointMarket = ({
       {/* 商品列表 */}
       <Row>
         {filteredProducts.map((product) => {
-          const { Name, Icon, Price, MaxDeduction } = product;
+          const { Name, Icon, Price, MaxDeduction, Fixed } = product;
           const iconUrl = Icon?.url ? `${cmsEndpoint}${Icon.url}` : "";
+          const priceDisplay = Fixed ? "自选金额" : `${Price} 现金`;
 
           return (
             <Col md={4} key={product.id} className="mb-4">
@@ -442,11 +451,15 @@ const MemberPointMarket = ({
                   <Row className="text-center d-flex">
                     <Col>
                       <AlternatingText
-                        text1={`${Price} 现金`}
-                        text2={`360币最高抵扣${Math.min(
-                          Number(Price || 0),
-                          Number(MaxDeduction || 0)
-                        )}！`}
+                        text1={priceDisplay}
+                        text2={`360币最高抵扣${
+                          Fixed
+                            ? MaxDeduction || 0
+                            : Math.min(
+                                Number(Price || 0),
+                                Number(MaxDeduction || 0)
+                              )
+                        }！`}
                         judge={MaxDeduction}
                       />
                     </Col>
@@ -467,7 +480,7 @@ const MemberPointMarket = ({
         })}
       </Row>
 
-      {/* 商品详情弹窗 */}
+      {/* 商品详情 Modal */}
       {selectedProduct && (
         <Modal show={showModal} onHide={handleModalClose}>
           <Modal.Header closeButton>
@@ -484,7 +497,11 @@ const MemberPointMarket = ({
             <p>{selectedProduct.Description}</p>
             <Row className="text-center">
               <Col>
-                <div>{selectedProduct.Price} 现金</div>
+                <div>
+                  {selectedProduct.Fixed
+                    ? "自选金额"
+                    : `${selectedProduct.Price} 现金`}
+                </div>
               </Col>
             </Row>
           </Modal.Body>
@@ -500,7 +517,7 @@ const MemberPointMarket = ({
         </Modal>
       )}
 
-      {/* 兑换确认弹窗 */}
+      {/* 兑换确认/输入 Modal */}
       {redeemProduct && (
         <Modal
           show={showConfirmModal}
@@ -508,6 +525,7 @@ const MemberPointMarket = ({
             setShowConfirmModal(false);
             setRedeemProduct(null);
             setCurrDeduction(0);
+            setCustomPrice("");
           }}
         >
           <Modal.Header closeButton>
@@ -515,59 +533,70 @@ const MemberPointMarket = ({
           </Modal.Header>
           <Modal.Body>
             <p>商品：{redeemProduct.Name}</p>
+
+            {redeemProduct.Fixed && (
+              <Form.Group className="mb-3">
+                <Form.Label>请输入金额 (Enter Amount)</Form.Label>
+                <InputGroup>
+                  <InputGroup.Text>$</InputGroup.Text>
+                  <Form.Control
+                    type="number"
+                    placeholder="0.00"
+                    value={customPrice}
+                    onChange={(e) => handleCustomPriceChange(e.target.value)}
+                  />
+                </InputGroup>
+              </Form.Group>
+            )}
+
             {(() => {
               const userData = getUser() || {};
               const cookiePoint = Number(userData.points || 0);
               const cookieDiscountPoint = Number(userData.discount_point || 0);
 
-              const finalCash =
-                Number(redeemProduct.Price || 0) - Number(currDeduction || 0);
+              const finalCash = currentBasePrice - Number(currDeduction || 0);
               const finalPoint =
-                cookiePoint - Number(redeemProduct.Price || 0) + Number(currDeduction || 0);
-              const finalDiscount = cookieDiscountPoint - Number(currDeduction || 0);
+                cookiePoint - currentBasePrice + Number(currDeduction || 0);
+              const finalDiscount =
+                cookieDiscountPoint - Number(currDeduction || 0);
 
               return (
                 <>
                   <p>
-                    现金：{finalCash} → 兑换后余额{" "}
-                    <b>{finalPoint}</b>
+                    现金：{finalCash} → 兑换后余额 <b>{finalPoint}</b>
                   </p>
                   <p>
-                    360币：{currDeduction} → 兑换后余额{" "}
-                    <b>{finalDiscount}</b>{" "}
-                    <b style={{ color: "SlateBlue" }}> </b>
+                    360币：{currDeduction} → 兑换后余额 <b>{finalDiscount}</b>
                   </p>
                   <hr />
-                  {maxDeduction > 0 && (
+                  {maxDeduction > 0 && currentBasePrice > 0 && (
                     <Form.Group>
-                      <Row className="d-flex">
+                      <Row className="d-flex align-items-center mb-2">
                         <Col md={7}>
-                          <Form.Label>
+                          <Form.Label className="m-0">
                             点数抵扣 ({currDeduction}/{maxDeduction})
                           </Form.Label>
                         </Col>
                         <Col md={5}>
-                          <Row>
-                            <InputGroup>
-                              <Form.Control
-                                type="number"
-                                value={currDeduction}
-                                onChange={(e) =>
-                                  handleDeductionChange(e.target.value)
-                                }
-                              />
-                              <Button
-                                variant="dark"
-                                onClick={() =>
-                                  handleDeductionChange(
-                                    Math.min(maxDeduction, cookieDiscountPoint)
-                                  )
-                                }
-                              >
-                                Max
-                              </Button>
-                            </InputGroup>
-                          </Row>
+                          <InputGroup size="sm">
+                            <Form.Control
+                              type="number"
+                              value={currDeduction}
+                              onChange={(e) =>
+                                handleDeductionChange(e.target.value)
+                              }
+                            />
+                            <Button
+                              variant="outline-secondary"
+                              onClick={() =>
+                                handleDeductionChange(
+                                  Math.min(maxDeduction, cookieDiscountPoint)
+                                )
+                              }
+                            >
+                              Max
+                            </Button>
+                          </InputGroup>
                         </Col>
                       </Row>
                       <Form.Control
@@ -583,21 +612,26 @@ const MemberPointMarket = ({
                 </>
               );
             })()}
-            <p>注：兑换成功后的核销券有效期为一年，请注意哦！</p>
           </Modal.Body>
           <Modal.Footer>
             {(() => {
               const userData = getUser() || {};
               const cookiePoint = Number(userData.points || 0);
               const cookieDiscountPoint = Number(userData.discount_point || 0);
-
-              const needCash =
-                Number(redeemProduct.Price || 0) - Number(currDeduction || 0);
+              const needCash = currentBasePrice - Number(currDeduction || 0);
 
               const sufficientPoint = cookiePoint >= needCash;
               const sufficientDiscountPoint =
                 cookieDiscountPoint - Number(currDeduction || 0) >= 0;
-              const canRedeem = sufficientPoint && sufficientDiscountPoint;
+              const validPrice = currentBasePrice > 0;
+              const canRedeem =
+                sufficientPoint && sufficientDiscountPoint && validPrice;
+
+              let btnText = "兑换";
+              if (loadingRedeem) btnText = "处理中...";
+              else if (!validPrice) btnText = "请输入金额";
+              else if (!sufficientPoint) btnText = "现金不足";
+              else if (!sufficientDiscountPoint) btnText = "360币不足";
 
               return (
                 <Button
@@ -606,13 +640,7 @@ const MemberPointMarket = ({
                   disabled={!canRedeem || loadingRedeem}
                   onClick={confirmRedeemNow}
                 >
-                  {canRedeem
-                    ? loadingRedeem
-                      ? "正在为您兑换.."
-                      : "兑换"
-                    : sufficientPoint
-                    ? "360币不足"
-                    : "现金不足"}
+                  {btnText}
                 </Button>
               );
             })()}
@@ -620,20 +648,76 @@ const MemberPointMarket = ({
         </Modal>
       )}
 
-      {/* 兑换成功弹窗 */}
+      {/* 兑换成功 Modal (包含 QR 和 详情) */}
       {redeemProduct && showSuccessModal && (
         <Modal show={showSuccessModal} onHide={closeSuccessModal} centered>
           <Modal.Header closeButton>
             <Modal.Title>{redeemProduct.Name}</Modal.Title>
           </Modal.Header>
           <Modal.Body className="text-center">
-            <i
-              className="bi bi-check-circle"
-              style={{ fontSize: "3rem", color: "green" }}
-            ></i>
-            <p className="mt-3">
-              兑换成功，我们已将优惠券发送至您的邮箱。
-            </p>
+            {/* 区分显示：Fixed 显示 QR+详情；否则显示邮件提示 */}
+            {redeemProduct.Fixed && redeemResult ? (
+              <div>
+                <div className="mb-3">
+                  <h5 className="text-success">
+                    <i className="bi bi-check-circle-fill me-2"></i>支付成功
+                  </h5>
+                </div>
+                
+                {/* 动态生成二维码图片，不使用外部包 */}
+                <div className="d-flex justify-content-center mb-3">
+                  <Image
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                      redeemResult.qrData
+                    )}`}
+                    alt="Redemption QR Code"
+                    thumbnail
+                  />
+                </div>
+                
+                <h4 className="mb-3" style={{ letterSpacing: "2px" }}>
+                  {redeemResult.qrData}
+                </h4>
+
+                <Card className="text-start bg-light border-0">
+                  <Card.Body>
+                    <ListGroup variant="flush" className="bg-transparent">
+                      <ListGroup.Item className="bg-transparent d-flex justify-content-between">
+                        <span>总金额:</span>
+                        <strong>${Number(redeemResult.amount).toFixed(2)}</strong>
+                      </ListGroup.Item>
+                      <ListGroup.Item className="bg-transparent d-flex justify-content-between">
+                        <span>360币抵扣:</span>
+                        <strong className="text-danger">
+                          -${Number(redeemResult.deduction).toFixed(2)}
+                        </strong>
+                      </ListGroup.Item>
+                      <ListGroup.Item className="bg-transparent d-flex justify-content-between border-top">
+                        <span>实际支付:</span>
+                        <strong>${Number(redeemResult.paid).toFixed(2)}</strong>
+                      </ListGroup.Item>
+                      <ListGroup.Item className="bg-transparent d-flex justify-content-between">
+                        <small className="text-muted">时间:</small>
+                        <small className="text-muted">
+                          {redeemResult.timestamp}
+                        </small>
+                      </ListGroup.Item>
+                    </ListGroup>
+                  </Card.Body>
+                </Card>
+              </div>
+            ) : (
+              // 普通商品 (非 Fixed)
+              <>
+                <i
+                  className="bi bi-check-circle"
+                  style={{ fontSize: "3rem", color: "green" }}
+                ></i>
+                <p className="mt-3">
+                  兑换成功，我们已将优惠券发送至您的邮箱。
+                </p>
+              </>
+            )}
           </Modal.Body>
           <Modal.Footer>
             <Button
@@ -641,7 +725,7 @@ const MemberPointMarket = ({
               className="w-100"
               onClick={closeSuccessModal}
             >
-              确定
+              关闭 / Close
             </Button>
           </Modal.Footer>
         </Modal>
