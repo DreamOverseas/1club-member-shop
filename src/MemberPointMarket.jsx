@@ -660,7 +660,7 @@ const MemberPointMarket = ({
               <div>
                 <div className="mb-3">
                   <h5 className="text-success">
-                    <i className="bi bi-check-circle-fill me-2"></i>支付成功
+                    请出示给工作人员扫码已确认付款
                   </h5>
                 </div>
                 
