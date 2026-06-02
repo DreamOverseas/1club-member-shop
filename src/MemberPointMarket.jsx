@@ -37,11 +37,19 @@ const MemberPointMarket = ({
   getUser = getCurrentMember,
   setUser = setCurrentMember,
 }) => {
+  const getProviderName = (product) =>
+    product?.Provider?.data?.attributes?.Name ||
+    product?.Provider?.Name ||
+    product?.ProviderName ||
+    "其他商户";
+
   // 当前用户（默认从 cookie 里读）
   const currUser = getUser() || {};
 
   const [products, setProducts] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedProviderGroup, setSelectedProviderGroup] = useState(null);
+  const [showProviderModal, setShowProviderModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
@@ -164,14 +172,75 @@ const MemberPointMarket = ({
     fetchProducts();
   }, [cmsApiKey, cmsEndpoint, currUser?.number]);
 
-  // ===== 搜索过滤 =====
-  const filteredProducts = products.filter((product) => {
-    const name = (product.Name || "").toLowerCase();
-    return name.includes(searchTerm.toLowerCase());
-  });
+  // ===== provider 分组 =====
+  const providerGroups = useMemo(() => {
+    const grouped = new Map();
+
+    products.forEach((product) => {
+      const providerName = getProviderName(product);
+      if (!grouped.has(providerName)) {
+        grouped.set(providerName, {
+          providerName,
+          products: [],
+        });
+      }
+      grouped.get(providerName).products.push(product);
+    });
+
+    return Array.from(grouped.values())
+      .map((group) => ({
+        ...group,
+        products: [...group.products].sort(
+          (a, b) => (a.Order || 0) - (b.Order || 0)
+        ),
+      }))
+      .sort((a, b) => a.providerName.localeCompare(b.providerName));
+  }, [products]);
+
+  // ===== 搜索过滤（优先支持 provider 名，也支持商品名） =====
+  const filteredProviderGroups = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return providerGroups;
+
+    return providerGroups
+      .map((group) => {
+        const providerMatched = group.providerName
+          .toLowerCase()
+          .includes(keyword);
+
+        const matchedProducts = providerMatched
+          ? group.products
+          : group.products.filter((product) =>
+              (product.Name || "").toLowerCase().includes(keyword)
+            );
+
+        return {
+          ...group,
+          products: matchedProducts,
+        };
+      })
+      .filter((group) => group.products.length > 0);
+  }, [providerGroups, searchTerm]);
 
   // ===== 弹窗 & 交互处理 =====
   const handleCardClick = (product) => {
+    setSelectedProduct(product);
+    setShowModal(true);
+  };
+
+  const handleProviderClick = (group) => {
+    setSelectedProviderGroup(group);
+    setShowProviderModal(true);
+  };
+
+  const handleProviderModalClose = () => {
+    setShowProviderModal(false);
+    setSelectedProviderGroup(null);
+  };
+
+  const handleSelectProductFromProvider = (product) => {
+    setShowProviderModal(false);
+    setSelectedProviderGroup(null);
     setSelectedProduct(product);
     setShowModal(true);
   };
@@ -308,10 +377,7 @@ const MemberPointMarket = ({
     const expiryDate = new Date();
     expiryDate.setFullYear(expiryDate.getFullYear() + 1);
 
-    const providerName =
-      redeemProduct?.Provider?.data?.attributes?.Name ??
-      redeemProduct?.Provider?.Name ??
-      "1club";
+    const providerName = getProviderName(redeemProduct);
 
     const finalValue = currentBasePrice - Number(currDeduction || 0);
 
@@ -422,28 +488,50 @@ const MemberPointMarket = ({
         </Col>
       </Row>
 
-      {/* 商品列表 */}
+      {/* provider 列表（同 provider 商品合并） */}
       <Row>
-        {filteredProducts.map((product) => {
-          const { Name, Icon, Price, MaxDeduction, Fixed } = product;
-          const iconUrl = Icon?.url ? `${cmsEndpoint}${Icon.url}` : "";
-          const priceDisplay = Fixed ? "自选金额" : `${Price} 现金`;
+        {filteredProviderGroups.map((group) => {
+          const { providerName, products: groupProducts } = group;
+          const firstProduct = groupProducts[0];
+          const iconUrl = firstProduct?.Icon?.url
+            ? `${cmsEndpoint}${firstProduct.Icon.url}`
+            : "";
+
+          const allFixed = groupProducts.every((p) => p.Fixed);
+          const nonFixedProducts = groupProducts.filter((p) => !p.Fixed);
+          const prices = nonFixedProducts.map((p) => Number(p.Price || 0));
+          const minPrice = prices.length ? Math.min(...prices) : 0;
+          const maxPrice = prices.length ? Math.max(...prices) : 0;
+
+          const summaryText = allFixed
+            ? "含自选金额商品"
+            : minPrice === maxPrice
+            ? `${minPrice} 现金`
+            : `${minPrice} - ${maxPrice} 现金`;
+
+          const maxDeductionInGroup = Math.max(
+            ...groupProducts.map((p) => Number(p.MaxDeduction || 0)),
+            0
+          );
 
           return (
-            <Col md={4} key={product.id} className="mb-4">
+            <Col md={4} key={providerName} className="mb-4">
               <Card>
                 <Card.Body
-                  onClick={() => handleCardClick(product)}
+                  onClick={() => handleProviderClick(group)}
                   style={{ cursor: "pointer" }}
                 >
                   <Card.Title className="product-card-title">
-                    {Name}
+                    {providerName}
                   </Card.Title>
+                  <div className="text-muted mb-2">
+                    共 {groupProducts.length} 款商品
+                  </div>
                   {iconUrl && (
                     <Card.Img
                       variant="top"
                       src={iconUrl}
-                      alt={Name}
+                      alt={providerName}
                       className="mb-3"
                       style={{ objectFit: "cover", height: "200px" }}
                     />
@@ -451,16 +539,9 @@ const MemberPointMarket = ({
                   <Row className="text-center d-flex">
                     <Col>
                       <AlternatingText
-                        text1={priceDisplay}
-                        text2={`360币最高抵扣${
-                          Fixed
-                            ? MaxDeduction || 0
-                            : Math.min(
-                                Number(Price || 0),
-                                Number(MaxDeduction || 0)
-                              )
-                        }！`}
-                        judge={MaxDeduction}
+                        text1={summaryText}
+                        text2={`360币最高抵扣${maxDeductionInGroup}！`}
+                        judge={maxDeductionInGroup}
                       />
                     </Col>
                   </Row>
@@ -469,9 +550,9 @@ const MemberPointMarket = ({
                   <Button
                     variant="dark"
                     className="w-100"
-                    onClick={(e) => handleRedeemClick(product, e)}
+                    onClick={() => handleProviderClick(group)}
                   >
-                    现在兑换
+                    选择商品
                   </Button>
                 </Card.Footer>
               </Card>
@@ -479,6 +560,41 @@ const MemberPointMarket = ({
           );
         })}
       </Row>
+
+      {/* provider 内商品选择 Modal */}
+      {selectedProviderGroup && (
+        <Modal show={showProviderModal} onHide={handleProviderModalClose}>
+          <Modal.Header closeButton>
+            <Modal.Title>{selectedProviderGroup.providerName}</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <ListGroup>
+              {selectedProviderGroup.products.map((product) => (
+                <ListGroup.Item
+                  key={product.id}
+                  className="d-flex justify-content-between align-items-center"
+                >
+                  <div>
+                    <div className="fw-bold">{product.Name}</div>
+                    <div className="text-muted small">
+                      {product.Fixed
+                        ? "自选金额"
+                        : `${Number(product.Price || 0)} 现金`}
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline-dark"
+                    size="sm"
+                    onClick={() => handleSelectProductFromProvider(product)}
+                  >
+                    选择
+                  </Button>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          </Modal.Body>
+        </Modal>
+      )}
 
       {/* 商品详情 Modal */}
       {selectedProduct && (
