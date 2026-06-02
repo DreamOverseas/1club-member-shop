@@ -51,18 +51,69 @@ npm install bootstrap-icons
 import "bootstrap-icons/font/bootstrap-icons.css";
 ```
 
-### Install This Project Locally (for development)
+## Testing in Another Project
 
-If you are working on this repository directly:
+To test this package locally in another project, use one of the following methods:
+
+### Method 1: Using npm link (Recommended for Development)
+
+This method creates a symlink, allowing real-time testing with code changes.
+
+**In the 1club-member-shop directory:**
 
 ```bash
-git clone https://github.com/DreamOverseas/1club-member-shop.git
-cd 1club-member-shop
-npm install
+npm link
 ```
 
-This project is a reusable component package, so there is no built-in dev server in this repo.
-To run and preview UI flows, link this package into a host React app and render exported components there.
+**In your test project directory:**
+
+```bash
+npm link oneclub-member-shop
+```
+
+Now any changes you make in `1club-member-shop/src` will be reflected immediately in your test project.
+
+**To unlink when done:**
+
+```bash
+# In your test project
+npm unlink oneclub-member-shop
+
+# In 1club-member-shop
+npm unlink
+```
+
+### Method 2: Using Local File Path
+
+Install directly from the local file path (no real-time updates).
+
+**In your test project:**
+
+```bash
+npm install file:../1club-member-shop
+```
+
+(Adjust the relative path based on your directory structure)
+
+### Method 3: Test with a Sample React App
+
+Create a quick test project to verify the package:
+
+```bash
+# Create a new React app
+npx create-react-app test-member-shop
+cd test-member-shop
+
+# Link the package
+npm link ../1club-member-shop
+
+# Install peer dependencies
+npm install react-bootstrap bootstrap bootstrap-icons
+
+# Update src/App.js with component examples
+```
+
+Then import and test components as shown in the Quick Start section.
 
 ## Exports
 
@@ -253,32 +304,6 @@ Current package scripts:
 
 - `npm run build` -> placeholder (`no build step yet`)
 - `npm test` -> placeholder (`no tests`)
-
-## Testing
-
-### Automated tests
-
-Run:
-
-```bash
-npm test
-```
-
-Current status:
-
-- The repository does not include an automated test suite yet.
-- `npm test` currently prints `no tests` and exits successfully.
-
-### Manual verification checklist
-
-Until automated tests are added, verify in a host app:
-
-1. Login/activation flow works for `Confirmed` and `Active` members.
-2. Profile card renders member data and can update password/phone.
-3. Market product list loads from CMS and search works.
-4. Redemption flow enforces deduction limits and balance checks.
-5. Coupon creation + email dispatch endpoints are called successfully.
-6. Success modal/QR display behavior matches product type (`Fixed` vs non-fixed).
 
 ## License
 
