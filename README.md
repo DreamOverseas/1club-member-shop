@@ -305,6 +305,77 @@ Current package scripts:
 - `npm run build` -> placeholder (`no build step yet`)
 - `npm test` -> placeholder (`no tests`)
 
+## Publishing Updates to npm
+
+To update and publish a new version of this package to npm:
+
+### Step 1: Update Version Number
+
+Edit `package.json` and increment the version number following [Semantic Versioning](https://semver.org/):
+
+- Bug fixes: increment patch version (e.g., `0.1.13` → `0.1.14`)
+- New features: increment minor version (e.g., `0.1.13` → `0.2.0`)
+- Breaking changes: increment major version (e.g., `0.1.13` → `1.0.0`)
+
+```json
+{
+  "version": "0.1.14"
+}
+```
+
+### Step 2: Commit and Push Changes
+
+```powershell
+git add package.json
+git commit -m "chore: version 0.1.14"
+git push origin main
+```
+
+### Step 3: Create Git Tag (Recommended)
+
+```powershell
+git tag v0.1.14
+git push origin v0.1.14
+```
+
+### Step 4: Login to npm (First Time Only)
+
+If you haven't logged in to npm yet in your terminal:
+
+```powershell
+npm login
+```
+
+Follow the browser prompt to authenticate with your npm account.
+
+### Step 5: Publish to npm
+
+```powershell
+npm publish
+```
+
+If 2FA (Two-Factor Authentication) is enabled on your npm account, follow the browser authentication prompt that appears.
+
+### Step 6: Verify Publication
+
+Check that the new version is published:
+
+```powershell
+npm info oneclub-member-shop
+```
+
+Or visit: https://www.npmjs.com/package/oneclub-member-shop
+
+### Updating Dependent Projects
+
+After publishing, projects using this package can update by:
+
+```powershell
+npm install oneclub-member-shop@latest
+# or specify version
+npm install oneclub-member-shop@0.1.14
+```
+
 ## License
 
 MIT
