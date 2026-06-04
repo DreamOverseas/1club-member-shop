@@ -387,7 +387,7 @@ const MemberPointMarket = ({
       expiry: expiryDate.toISOString(),
       assigned_from: providerName,
       assigned_to: latestUser.name,
-      value: finalValue,
+      value: currentBasePrice,
     };
 
     try {
