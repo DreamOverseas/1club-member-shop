@@ -76,8 +76,16 @@ const MemberPointMarket = ({
   // 最大可抵扣（受商品 MaxDeduction & 当前基础价格 双重限制）
   const maxDeduction = useMemo(() => {
     if (!redeemProduct) return 0;
-    const max = Number(redeemProduct.MaxDeduction || 0);
-    return Math.min(currentBasePrice, max);
+    const rawMax = Number(redeemProduct.MaxDeduction || 0);
+
+    if (!Number.isFinite(rawMax) || rawMax <= 0) return 0;
+
+    // 0-1 之间按比例计算：金额 * MaxDeduction，并取整数
+    if (rawMax > 0 && rawMax < 1) {
+      return Math.floor(currentBasePrice * rawMax);
+    }
+
+    return Math.min(currentBasePrice, rawMax);
   }, [redeemProduct, currentBasePrice]);
 
   // ===== 页面加载时自动同步最新积分 & 写 cookie =====
