@@ -92,6 +92,7 @@ export default function SingleProductRedeemPanel({
   }, [cmsEndpoint, cmsApiKey]);
 
   const price = Number(product?.Price || 0);
+  const ratio = Number(product?.Ratio || 1);
   const maxDeduction = useMemo(
     () => Math.min(Number(product?.MaxDeduction || 0), price),
     [price, product]
@@ -100,9 +101,15 @@ export default function SingleProductRedeemPanel({
   const cash = currUser?.points || 0;
   const discountPoint = currUser?.discount_point || 0;
 
+  // 最多可使用的抵扣点数（受 MaxDeduction 和 360币余额双重限制）
+  const effectiveMaxDeduction = Math.min(
+    maxDeduction,
+    ratio > 0 ? Math.floor(discountPoint / ratio) : maxDeduction
+  );
+
   // ✅ 本次实际支付金额（和 MemberPointMarket 保持一致的展示逻辑）
-  const cashToPay = price - deduction; // 现金：价格 - 抵扣
-  const pointsToUse = deduction; // 360币：抵扣多少就是用多少
+  const cashToPay = price - deduction; // 现金：价格 - 抵扣点数
+  const pointsToUse = Math.floor(deduction * ratio); // 360币：抵扣点数 × Ratio，取整
 
   // ✅ 兑换后的余额
   const remainingCash = cash - cashToPay;
@@ -118,7 +125,7 @@ export default function SingleProductRedeemPanel({
     let n = Number(value);
     if (Number.isNaN(n)) n = 0;
     if (n < 0) n = 0;
-    if (n > maxDeduction) n = maxDeduction;
+    if (n > effectiveMaxDeduction) n = effectiveMaxDeduction;
     setDeduction(n);
   };
 
@@ -356,12 +363,12 @@ export default function SingleProductRedeemPanel({
               {maxDeduction > 0 && (
                 <Form.Group className="mt-3">
                   <Form.Label>
-                    点数抵扣 ({deduction}/{maxDeduction})
+                    点数抵扣 ({deduction}/{effectiveMaxDeduction})
                   </Form.Label>
 
                   <Form.Range
                     min={0}
-                    max={maxDeduction}
+                    max={effectiveMaxDeduction}
                     step={1}
                     value={deduction}
                     onChange={(e) =>
@@ -373,7 +380,7 @@ export default function SingleProductRedeemPanel({
                     <Form.Control
                       type="number"
                       min={0}
-                      max={maxDeduction}
+                      max={effectiveMaxDeduction}
                       value={deduction}
                       onChange={(e) =>
                         handleDeductionInput(e.target.value)
@@ -382,7 +389,7 @@ export default function SingleProductRedeemPanel({
                     <Button
                       variant="outline-secondary"
                       onClick={() =>
-                        handleDeductionInput(maxDeduction)
+                        handleDeductionInput(effectiveMaxDeduction)
                       }
                     >
                       Max

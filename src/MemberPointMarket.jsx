@@ -330,9 +330,10 @@ const MemberPointMarket = ({
 
         const productPrice = currentBasePrice;
         const usedDiscount = Number(currDeduction || 0);
+        const ratio = Number(redeemProduct?.Ratio || 1);
 
         const newPoint = oldPoint - (productPrice - usedDiscount);
-        const newDiscountPoint = oldDiscountPoint - usedDiscount;
+        const newDiscountPoint = oldDiscountPoint - Math.floor(usedDiscount * ratio);
 
         const existingCoupons =
           userRecord.MyCoupon?.map((c) => c.documentId) ?? [];
@@ -420,10 +421,11 @@ const MemberPointMarket = ({
           // Fixed 模式：跳过邮件，直接显示结果
           await updateUserPoint(couponData.cid);
           
+          const ratio = Number(redeemProduct?.Ratio || 1);
           setRedeemResult({
             qrData: QRdata,
             amount: currentBasePrice,
-            deduction: currDeduction,
+            deduction: Math.floor(currDeduction * ratio),
             paid: finalValue,
             timestamp: new Date().toLocaleString(),
           });
@@ -677,12 +679,17 @@ const MemberPointMarket = ({
               const userData = getUser() || {};
               const cookiePoint = Number(userData.points || 0);
               const cookieDiscountPoint = Number(userData.discount_point || 0);
+              const ratio = Number(redeemProduct?.Ratio || 1);
 
               const finalCash = currentBasePrice - Number(currDeduction || 0);
               const finalPoint =
                 cookiePoint - currentBasePrice + Number(currDeduction || 0);
-              const finalDiscount =
-                cookieDiscountPoint - Number(currDeduction || 0);
+              const discountCoinCost = Math.floor(Number(currDeduction || 0) * ratio);
+              const finalDiscount = cookieDiscountPoint - discountCoinCost;
+
+              // 最多可输入的点数（受 MaxDeduction 和 360币余额双重限制）
+              const maxByCoins = ratio > 0 ? Math.floor(cookieDiscountPoint / ratio) : maxDeduction;
+              const effectiveMax = Math.min(maxDeduction, maxByCoins);
 
               return (
                 <>
@@ -690,7 +697,7 @@ const MemberPointMarket = ({
                     现金：{finalCash} → 兑换后余额 <b>{finalPoint}</b>
                   </p>
                   <p>
-                    360币：{currDeduction} → 兑换后余额 <b>{finalDiscount}</b>
+                    360币：{discountCoinCost} → 兑换后余额 <b>{finalDiscount}</b>
                   </p>
                   <hr />
                   {maxDeduction > 0 && currentBasePrice > 0 && (
@@ -698,7 +705,7 @@ const MemberPointMarket = ({
                       <Row className="d-flex align-items-center mb-2">
                         <Col md={7}>
                           <Form.Label className="m-0">
-                            点数抵扣 ({currDeduction}/{maxDeduction})
+                            点数抵扣 ({currDeduction}/{effectiveMax})
                           </Form.Label>
                         </Col>
                         <Col md={5}>
@@ -713,9 +720,7 @@ const MemberPointMarket = ({
                             <Button
                               variant="outline-secondary"
                               onClick={() =>
-                                handleDeductionChange(
-                                  Math.min(maxDeduction, cookieDiscountPoint)
-                                )
+                                handleDeductionChange(effectiveMax)
                               }
                             >
                               Max
@@ -726,7 +731,7 @@ const MemberPointMarket = ({
                       <Form.Control
                         type="range"
                         min="0"
-                        max={maxDeduction}
+                        max={effectiveMax}
                         value={currDeduction}
                         onChange={(e) => handleDeductionChange(e.target.value)}
                         className="deduction-range"
@@ -742,11 +747,12 @@ const MemberPointMarket = ({
               const userData = getUser() || {};
               const cookiePoint = Number(userData.points || 0);
               const cookieDiscountPoint = Number(userData.discount_point || 0);
+              const ratio = Number(redeemProduct?.Ratio || 1);
               const needCash = currentBasePrice - Number(currDeduction || 0);
+              const discountCoinCost = Math.floor(Number(currDeduction || 0) * ratio);
 
               const sufficientPoint = cookiePoint >= needCash;
-              const sufficientDiscountPoint =
-                cookieDiscountPoint - Number(currDeduction || 0) >= 0;
+              const sufficientDiscountPoint = cookieDiscountPoint - discountCoinCost >= 0;
               const validPrice = currentBasePrice > 0;
               const canRedeem =
                 sufficientPoint && sufficientDiscountPoint && validPrice;
